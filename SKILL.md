@@ -81,8 +81,16 @@ Never call `reset_scene()` on a user's existing scene without asking. For
 editing their scene, inspect it first (`get_objects_summary`) and work on named
 objects. Headless runs stay the default for the critique loop because they are
 reproducible. Use live mode to show progress and for scene/lighting work on
-the user's own files. If the MCP tools fail, see the Troubleshooting section of
-`<skill>/README.md`.
+the user's own files.
+
+If the MCP tools fail ("Cannot connect to Blender"), run
+`python <skill>/scripts/setup_blender_mcp.py --check` and follow what it
+says. The usual cause is that the add-on only starts its server at Blender
+launch, and only when Online Access is on. The fix is *Preferences → Add-ons →
+MCP → Start MCP Bridge Server* after enabling Online Access, not a reinstall.
+`--install-addon`/`--enable-online-access` change the user's Blender
+preferences: ask first, and Blender must be closed. Never close the user's
+Blender yourself without asking; they may have unsaved work.
 
 ## Project layout
 

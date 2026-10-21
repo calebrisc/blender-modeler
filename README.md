@@ -96,16 +96,29 @@ to do these steps for you.
    python -m venv ~/Tools/blender_mcp/venv
    ~/Tools/blender_mcp/venv/bin/pip install ~/Tools/blender_mcp/mcp        # Windows: venv\Scripts\pip
    ```
-2. **Install the add-on** into Blender 5.1+. Either drag the zip from the
-   [Blender Lab page](https://www.blender.org/lab/mcp-server/) into Blender
-   twice (the first drop adds the repository, the second installs), or build
-   and install it from the clone:
+2. **Install the add-on and turn on Online Access.** Close Blender first, then
+   run:
    ```bash
-   blender -c extension build --source-dir ~/Tools/blender_mcp/addon/blender_mcp_addon --output-dir ~/Tools/blender_mcp/dist
-   blender -c extension install-file -r user_default -e ~/Tools/blender_mcp/dist/mcp-1.0.3.zip
+   python <skill>/scripts/setup_blender_mcp.py --install-addon ~/Tools/blender_mcp/addon/blender_mcp_addon --enable-online-access --check
    ```
-3. In Blender: **Edit → Preferences → System → Allow Online Access** must be
-   on, or the add-on won't start. It auto-starts on `localhost:9876`.
+   (`<skill>` is where you cloned this repo.) This builds and installs the
+   add-on, saves *Allow Online Access* in your Blender preferences (backing them
+   up first), and checks everything. To do it by hand instead: *Edit →
+   Preferences → Get Extensions → ⌄ → Install from Disk* with the zip from the
+   [Blender Lab page](https://www.blender.org/lab/mcp-server/), then *System →
+   Allow Online Access*, then *☰ (bottom left) → Save Preferences*.
+
+   > **Why Online Access matters:** the add-on starts its server **only once,
+   > when Blender launches**, and only if Online Access is already on. Turning
+   > it on later does nothing until you restart Blender or click *Start MCP
+   > Bridge Server* in the add-on's preferences. If you don't save
+   > preferences, it's off again next launch. Reinstalling the add-on is not
+   > needed.
+   >
+   > Don't want to change the setting? Launch Blender with `--online-mode`
+   > instead. That turns it on for that launch only.
+3. Open Blender. The add-on auto-starts on `localhost:9876`. You can confirm it
+   in *Preferences → Add-ons → MCP* ("Server is running").
 4. **Register the server with your agent.** The server command is
    `~/Tools/blender_mcp/venv/bin/blender-mcp` (Windows:
    `venv\Scripts\blender-mcp.exe`). Use the full absolute path.
@@ -131,11 +144,15 @@ use it on machines with sensitive data.
 
 ## Troubleshooting
 
+Start with `python <skill>/scripts/setup_blender_mcp.py --check`. It reports
+what's wrong with the live-mode setup and how to fix each item.
+
 | Problem | Fix |
 |---|---|
 | `Blender not found` | set `BLENDER_EXE` to the executable, or pass `--blender PATH` |
 | MCP tools missing | start a new session after registering; check the server path is absolute |
-| MCP tools time out | Blender must be open, Online Access on, and the add-on preferences should show the server running |
+| MCP tools time out / "Cannot connect to Blender" | the add-on server isn't running. Turn on Online Access, then *Preferences → Add-ons → MCP → Start MCP Bridge Server* (no reinstall needed), or restart Blender |
+| Works once, broken after restarting Blender | Online Access was turned on but preferences weren't saved: *☰ → Save Preferences*, or `setup_blender_mcp.py --enable-online-access` with Blender closed |
 | Port 9876 in use | another Blender MCP add-on (e.g. the community `blender-mcp`) is running; disable one |
 | Strange script errors on old Blender | upgrade to 4.2+; the helpers target the 4.2+/5.x API |
 
@@ -145,6 +162,7 @@ use it on machines with sensitive data.
 SKILL.md                  instructions the agent follows
 references/techniques.md  modelling craft rules and Blender API gotchas
 scripts/bmod.py           launcher: finds Blender, runs one iteration, summarises
+scripts/setup_blender_mcp.py  live-mode setup and diagnostics (add-on, Online Access, server)
 scripts/run_pipeline.py   runs inside Blender: build → check → render → save
 scripts/check_geometry.py floating parts, gaps, contacts, mesh health, spec checks
 scripts/render_views.py   8-view clay/shaded review sheet
