@@ -22,6 +22,12 @@ flat colours. This skill gives the agent a process and tools instead:
    each stage.
 6. **Quality defaults:** builder helpers bevel edges, add subtle material
    variation and run wood grain along each part's length.
+7. **Features inside existing models:** a second mode for adding channels,
+   wiring, cavities and mounts to a big frozen mesh (a sculpt or print
+   master): ray-parity measurement of the host, clearance-based channel
+   routing, a channel check (wall to skin, bend radius, loose ends, keep-outs,
+   fill), MANIFOLD booleans at scale, post-cut verification (sealed pockets,
+   unexpected openings, blocked tunnels) and ghosted context / cutaway renders.
 
 The approach follows published research on LLM-driven Blender modelling
 (LL3M, VIGA, SEIG, BlenderAlchemy). The common finding is that write → render →
@@ -78,7 +84,14 @@ review sheets through each stage. It saves everything under
 `~/Documents/BlenderAI/<model-name>/`, including a `model.blend` you can open.
 
 It is strongest on hard-surface subjects: furniture, products, props,
-architecture, mechanical parts and cables. Characters, faces, animals and
+architecture, mechanical parts and cables. It also handles "add internal
+features to my existing model" jobs, e.g.:
+
+> Route LED wire channels from the eye pockets to a battery bay inside this figure, 3 mm walls, and give me port files.
+
+The agent measures the host without modifying it, builds the features in their
+own collection, checks them, and only cuts them into a copy of the master when
+you say so. Characters, faces, animals and
 realistic plants don't come out well from code. For those, the skill tells
 the agent to suggest an existing asset and handle the scene around it.
 
@@ -153,20 +166,32 @@ what's wrong with the live-mode setup and how to fix each item.
 | MCP tools missing | start a new session after registering; check the server path is absolute |
 | MCP tools time out / "Cannot connect to Blender" | the add-on server isn't running. Turn on Online Access, then *Preferences → Add-ons → MCP → Start MCP Bridge Server* (no reinstall needed), or restart Blender |
 | Works once, broken after restarting Blender | Online Access was turned on but preferences weren't saved: *☰ → Save Preferences*, or `setup_blender_mcp.py --enable-online-access` with Blender closed |
-| Port 9876 in use | another Blender MCP add-on (e.g. the community `blender-mcp`) is running; disable one |
+| Port 9876 in use | another Blender MCP add-on (e.g. the community `blender-mcp`) is running; disable one. `--check` shows the PID, command line and window title of the owner |
+| MCP talks to the wrong Blender (default cube scene) | only one Blender can own port 9876; `--check` shows which window owns it. Close the other one or open your file in that one |
+| MCP missing from Preferences after the agent installed it (Windows, Claude desktop app) | the agent ran inside the app's sandbox, so the install went to a virtualised AppData that your Blender can't see. `--check` says so. Run `setup_blender_mcp.py --package-addon` and use *Get Extensions → ⌄ → Install from Disk* with the zip it puts in Downloads |
+| MCP calls time out on a big file | the call is still running in Blender's UI thread. Heavy work belongs in the background (`bmod.py --script`); the skill tells the agent to ask before killing a hung Blender |
+| Viewport screenshot is black | taken right after heavy work; force a redraw and retry once |
 | Strange script errors on old Blender | upgrade to 4.2+; the helpers target the 4.2+/5.x API |
 
 ## What's in here
 
 ```
-SKILL.md                  instructions the agent follows
-references/techniques.md  modelling craft rules and Blender API gotchas
-scripts/bmod.py           launcher: finds Blender, runs one iteration, summarises
-scripts/setup_blender_mcp.py  live-mode setup and diagnostics (add-on, Online Access, server)
-scripts/run_pipeline.py   runs inside Blender: build → check → render → save
-scripts/check_geometry.py floating parts, gaps, contacts, mesh health, spec checks
-scripts/render_views.py   8-view clay/shaded review sheet
-scripts/modelkit.py       builders, finishing, materials, studio lighting
+SKILL.md                        instructions the agent follows
+references/techniques.md        modelling craft rules and Blender API gotchas
+references/existing_models.md   adding features inside/on an existing (frozen) model
+references/live_mode.md         live MCP rules, tool quirks, sandbox, recovery
+scripts/bmod.py                 launcher: finds Blender, runs one iteration or any script, summarises
+scripts/setup_blender_mcp.py    live-mode setup and diagnostics (add-on, Online Access, server, sandbox)
+scripts/run_pipeline.py         runs inside Blender: build → check → render → save
+scripts/check_geometry.py       floating parts, gaps, contacts, mesh health, spec checks
+scripts/render_views.py         8-view clay/shaded sheet, context/ghost, cutaway, live viewport
+scripts/modelkit.py             builders, finishing, booleans at scale, materials, studio lighting
+scripts/hostkit.py              measure an existing mesh (ray parity, wall, voxels, pockets)
+scripts/routekit.py             route channels through a host
+scripts/check_channels.py       wall, bend, keep-out, loose-end, connectivity and fill checks
+scripts/verify_cuts.py          post-boolean verification
+scripts/portkit.py              port files: dump a collection live, rebuild headless
+tests/run_tests.py              regression tests (drives Blender headless)
 ```
 
 The scripts also work without an agent:
@@ -176,8 +201,9 @@ The scripts also work without an agent:
 
 Improvements are expected. If you or your agent finds a bug or a missing
 helper, open an issue or a pull request. Please:
-- test the change with a real `bmod.py` run and include the review sheet if
-  it affects visuals,
+- run `python tests/run_tests.py` (about 30 s; it drives Blender headless and
+  prints the review images to look at), and include the review sheet if the
+  change affects visuals,
 - add a line to `CHANGELOG.md`,
 - keep `SKILL.md` tool-neutral (no app-specific tool names or personal paths).
 

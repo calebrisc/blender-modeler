@@ -3,3 +3,4 @@ __pycache__/
 *.blend1
 renders/
 .DS_Store
+tests/_out/

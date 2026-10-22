@@ -38,7 +38,10 @@
   turns into a blob.
 - **boolean:** holes, slots and engraved panel lines. Use sparingly. The
   cutter gets a `_` prefix and is hidden. Prefer modelling the shape directly
-  (extrude_profile) when you can. Use `solver = "EXACT"`.
+  (extrude_profile) when you can. `solver="AUTO"` picks MANIFOLD when every
+  input is closed, else EXACT (§ Booleans at scale).
+- **tube_mesh(points, dia):** a watertight tube for boolean cutters and
+  channels (curve tubes converted to mesh are not reliably closed).
 - **array / mirror:** slats, spokes, rungs, bolts, symmetric halves. Model one
   half and mirror it.
 
@@ -82,6 +85,91 @@
   does.
 - Use `obj.evaluated_get(depsgraph)` to read geometry *with* modifiers.
 - Angles in `rotation_euler` are radians. modelkit builders take degrees.
+- Evaluated CURVE `bound_box` is padded by about ±1 m in 5.2 (a 3 cm cable
+  reports x −1.01…1.02). Compute bounds from evaluated vertices
+  (`mk.object_corners`/`mk.bounds` do).
+- Boolean solvers: `bpy.types.BooleanModifier.bl_rna.properties["solver"].enum_items`
+  lists them. 5.x has `FLOAT` (was `FAST`), `EXACT`, `MANIFOLD` (4.5+).
+- MANIFOLD silently returns the target unchanged when its faces are wound
+  inconsistently (flipped faces); `mk.apply_cuts` fixes that on the copy and
+  warns when a boolean changed nothing.
+- Geometry Nodes modifier inputs can't be set as ID properties (`mod["Socket_2"]`)
+  in 5.x; put constants in the nodes instead.
+- `bmesh.ops.spin` gets very slow above ~100k faces (28 s for 250k); build
+  rings directly (`mk.lathe` does).
+- Open untrusted files or autosaves with
+  `bpy.ops.wm.open_mainfile(filepath=..., use_scripts=False)`.
+- Cache heavy data across MCP calls in `bpy.app.driver_namespace`.
+- PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM.
 - When unsure about an API, check the docs instead of guessing. With MCP
   connected, use `search_api_docs` / `get_python_api_docs`; otherwise
   docs.blender.org/api/current.
+
+## Working with existing meshes
+(Full recipe: `existing_models.md`.)
+- Read geometry with `foreach_get` into numpy and move it through
+  `matrix_world`; hosts often carry an unapplied rotation and scale.
+  `hostkit.world_verts` / `world_normals` do this.
+- Inside/outside: ray parity with a 3-ray majority (`hostkit.inside`). Face
+  normals lie on sculpted, scanned or decimated meshes. Nudge the ray origin
+  past each hit (~1e-6 of the object size) and cap the loop.
+- Wall thickness / signed distance = `find_nearest` distance × the parity sign
+  (`hostkit.clearance`: + inside, − outside).
+- Pockets and rims: the `sharp_edge` attribute (or face angle) → cluster → PCA
+  axis → ray-cast along the axis for the floor depth (`sharp_edge_clusters`,
+  `ray_floor`). List every cluster; ask which are features.
+- Capacity and fit: place real items one by one rather than dividing volumes.
+
+## Channels, cable routing and cavities
+
+| rule of thumb | value |
+|---|---|
+| channel Ø by bundle | ~6 mm one LED run, 8 mm for 2–3, 10 mm trunks/power, 2.5–4 mm reed or sensor leads |
+| fill (bundle area / channel area) | ≤ ~60 % to pull wire through |
+| wall to the skin (FDM) | ≥ 3 mm |
+| keep-out margin from cavities while routing | ≥ 10 mm (check ≥ 3 mm wall afterwards) |
+| bend radius for pull-through | ≥ 15–20 mm; a tighter V-turn needs a print split there |
+| channel end extension into what it joins | 1–1.5 mm |
+| routing cost per voxel step | length × (1 + (pref_clear / clear)²), pref ~25 mm |
+
+- Plan cavities and keep-outs before channels.
+- Drop holes go straight down from each pocket floor; snap every branch start
+  onto its trunk (`routekit.snap_junctions`; `merge_tree` segments share their
+  junction points exactly).
+- Route on the voxel grid, then smooth and resample, then re-check against the
+  real mesh (`check_channels`), not the grid.
+
+## Booleans at scale (Blender 5.x)
+- `MANIFOLD` handled a 4.9M-triangle body with 80+ cutters in about 1 min, in
+  one modifier with a cutter collection (`mk.apply_cuts`). It needs closed,
+  consistently wound inputs: build cutters as closed meshes (`tube_mesh`,
+  `mesh_from_data`) and recalculate normals.
+- `EXACT` for small or non-manifold cases (much slower on big meshes).
+- Every cutter that opens the skin overshoots it by ≥ 1 mm. A cut 0.01 mm
+  past the surface left paper-thin skins sealing magnet wells; a cutter that
+  stops short leaves a sealed void (`apply_cuts` warns, `verify_cuts` proves it).
+- Order: union/ADD → splits (doors, lids) → body cuts → part cuts.
+- Switch off display-only modifiers (WeightedNormal) before baking.
+- Print-fit gaps: ~0.3 mm on doors and lids, taken off the body side
+  (`mk.offset_copy(split_cutter, 0.0003)`).
+- Always verify afterwards: shells, skin openings, tunnels open (`verify_cuts`).
+
+## Rescaling a finished model
+- Scale root objects only; children follow (`mk.scale_scene(f, roots_only=True)`).
+  Scaling every object double-scales parented ones (a lid ended up 860 mm out
+  of place). Bake or apply transforms when exporting.
+- Keep one scale constant (`SC = 1524 / 1207`) in a small config module and
+  multiply every body-relative number by it.
+- Hardware stays at real size: magnets, pins, LED strip, cable OD, channel
+  diameters, purchased boards and trays.
+- Re-measure features after the rescale instead of scaling old measurements
+  blindly, and check bounding boxes against expectations.
+
+## Physical sanity checks for statues and prints
+- Printed mass ≈ shell area × wall × density + infill fraction × inner volume ×
+  density (PLA ~1.24 g/cm³).
+- Find the centre of mass and the support polygon (the feet). Tip-over force
+  at height h ≈ m·g·d / h, with d the horizontal distance from the CoM to the
+  nearest edge of the support polygon.
+- Ballast: cavities at the lowest point with fill ports and caps; steel shot
+  (~4.5 kg/L) beats sand (~1.6 kg/L) by about 3×; keep the cavity walls thick.

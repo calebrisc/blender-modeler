@@ -9,6 +9,10 @@ The point is to make the high-quality path the easy path:
   because perfectly uniform surfaces read as fake
 
 Units are metres, Z up, the model faces -Y (front view), origin at floor centre.
+(tube/tube_mesh also take units="mm" for fabrication work.)
+
+Nothing here uses bpy.ops except render_final(), so the builders are safe to
+call from a live MCP session.
 
     import modelkit as mk
     mk.reset_scene()
@@ -18,10 +22,14 @@ Units are metres, Z up, the model faces -Y (front view), origin at floor centre.
 """
 
 import math
+import time
 
 import bmesh
 import bpy
+import numpy as np
 from mathutils import Euler, Matrix, Vector
+
+_UNIT = {"m": 1.0, "cm": 0.01, "mm": 0.001}
 
 
 # ---------------------------------------------------------------- scene
@@ -94,13 +102,35 @@ def lathe(name, profile, location=(0, 0, 0), rotation=(0, 0, 0), segments=64, co
 
     Use for anything turned: vases, bottles, lamp bases, table legs, knobs.
     Start/end the profile at radius 0 to get closed caps.
+    Built directly as rings (bmesh spin gets very slow above ~100k faces).
     """
+    prof = []
+    for r, z in profile:
+        if not prof or abs(prof[-1][0] - r) > 1e-9 or abs(prof[-1][1] - z) > 1e-9:
+            prof.append((float(r), float(z)))
+    ang = np.linspace(0.0, math.tau, segments, endpoint=False)
+    cs, sn = np.cos(ang), np.sin(ang)
+    verts, rings = [], []
+    for r, z in prof:
+        if abs(r) < 1e-9:                       # on the axis: one pole vertex
+            rings.append(np.full(segments, len(verts)))
+            verts.append((0.0, 0.0, z))
+        else:
+            rings.append(np.arange(len(verts), len(verts) + segments))
+            verts += list(zip(r * cs, r * sn, np.full(segments, z)))
+    faces = []
+    nxt = np.roll(np.arange(segments), -1)
+    for a, b in zip(rings[:-1], rings[1:]):
+        for q in np.stack([a, a[nxt], b[nxt], b], 1).tolist():
+            f = [v for i, v in enumerate(q) if v != q[i - 1]]   # collapse pole duplicates
+            if len(f) >= 3:
+                faces.append(f)
+    me = bpy.data.meshes.new(name)
+    me.from_pydata(verts, [], faces)
+    me.validate()
     bm = bmesh.new()
-    verts = [bm.verts.new((r, 0.0, z)) for r, z in profile]
-    edges = [bm.edges.new((verts[i], verts[i + 1])) for i in range(len(verts) - 1)]
-    bmesh.ops.spin(bm, geom=verts + edges, cent=(0, 0, 0), axis=(0, 0, 1),
-                   angle=math.tau, steps=segments, use_duplicate=False)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+    bm.from_mesh(me)
+    bpy.data.meshes.remove(me)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     return _object_from_bmesh(name, bm, location, rotation, coll)
 
@@ -121,35 +151,142 @@ def extrude_profile(name, points, depth, location=(0, 0, 0), rotation=(0, 0, 0),
 
 
 def tube(name, points, radius, location=(0, 0, 0), smooth=True, resolution=12,
-         bevel_resolution=6, coll=None, to_mesh=True):
-    """Sweep a round section along a path of 3D points (world offsets from location).
+         bevel_resolution=6, coll=None, to_mesh=True, kind=None, units="m"):
+    """Sweep a round section along a path of 3D points (offsets from location).
 
     Use for handles, pipes, cables, wire frames, bent rods. Make the first and last
     points sit inside the parts they connect to, or check_geometry will flag a gap.
+
+    kind: "bezier" (smooth, AUTO handles; the default via smooth=True) or "poly"
+    (straight between points). Use "poly" for dense routed paths: AUTO handles
+    overshoot between closely spaced points. units: "m" or "mm" for points/radius.
+    The object stores its centre line and diameter (custom props "centerline",
+    "dia", metres, object space) for check_channels / verify_cuts.
     """
+    k = _UNIT[units]
+    pts = [tuple(c * k for c in p) for p in points]
+    radius = radius * k
+    kind = kind or ("bezier" if smooth else "poly")
     cd = bpy.data.curves.new(name, "CURVE")
     cd.dimensions = "3D"
     cd.bevel_depth = radius
     cd.bevel_resolution = bevel_resolution
     cd.use_fill_caps = True
     cd.resolution_u = resolution
-    if smooth:
+    if kind == "bezier":
         sp = cd.splines.new("BEZIER")
-        sp.bezier_points.add(len(points) - 1)
-        for bp, p in zip(sp.bezier_points, points):
+        sp.bezier_points.add(len(pts) - 1)
+        for bp, p in zip(sp.bezier_points, pts):
             bp.co = p
             bp.handle_left_type = bp.handle_right_type = "AUTO"
-    else:
+    elif kind == "poly":
         sp = cd.splines.new("POLY")
-        sp.points.add(len(points) - 1)
-        for pt, p in zip(sp.points, points):
+        sp.points.add(len(pts) - 1)
+        for pt, p in zip(sp.points, pts):
             pt.co = (*p, 1.0)
+    else:
+        raise ValueError("kind must be 'bezier' or 'poly'")
     obj = _link(bpy.data.objects.new(name, cd), coll)
-    obj.location = location
+    obj.location = [c * k for c in location]
     if to_mesh:
         obj = convert_to_mesh(obj)
         weld(obj)  # curve caps come out as separate islands
+    _tag_tube(obj, pts, radius * 2)
     return obj
+
+
+def _tag_tube(obj, pts_local, dia):
+    obj["centerline"] = [float(c) for p in pts_local for c in p]
+    obj["dia"] = float(dia)
+
+
+def tube_mesh(name, points, dia, segments=16, end_ext=0.0, units="m", coll=None):
+    """Watertight tube mesh along a polyline: parallel-transport rings, fan-capped ends.
+
+    Closed and consistently wound, so it works as a MANIFOLD boolean cutter (curve
+    tubes converted to mesh are not reliably closed). end_ext extends both ends along
+    their tangents so a channel breaks cleanly into the pocket/cavity it joins
+    (1-1.5 mm for print channels). points/dia/end_ext are in `units`; the object is in
+    metres with identity transform. Stores "centerline"/"dia" props (metres).
+    """
+    k = _UNIT[units]
+    P = np.asarray(points, float) * k
+    keep = np.r_[True, np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-9]
+    P = P[keep]
+    if len(P) < 2:
+        raise ValueError(f"{name}: tube_mesh needs at least two distinct points")
+    centre = P.copy()
+    e = end_ext * k
+    if e > 0:
+        d0 = P[0] - P[1]
+        d1 = P[-1] - P[-2]
+        P = np.vstack([P[0] + d0 / np.linalg.norm(d0) * e, P, P[-1] + d1 / np.linalg.norm(d1) * e])
+    r = dia * k / 2
+    T = np.gradient(P, axis=0)
+    T /= np.linalg.norm(T, axis=1)[:, None]
+    n = np.cross(T[0], [0, 0, 1.0])
+    if np.linalg.norm(n) < 1e-3:
+        n = np.cross(T[0], [1.0, 0, 0])
+    n /= np.linalg.norm(n)
+    ang = np.linspace(0, 2 * np.pi, segments, endpoint=False)
+    rings = []
+    for p, t in zip(P, T):
+        n = n - np.dot(n, t) * t                  # parallel transport: no twisting
+        n /= np.linalg.norm(n)
+        b = np.cross(t, n)
+        rings.append(p + r * (np.cos(ang)[:, None] * n + np.sin(ang)[:, None] * b))
+    verts = np.vstack(rings).tolist()
+    L, sg = len(P), segments
+    faces = [(i * sg + j, i * sg + (j + 1) % sg, (i + 1) * sg + (j + 1) % sg, (i + 1) * sg + j)
+             for i in range(L - 1) for j in range(sg)]
+    c0, c1 = len(verts), len(verts) + 1
+    verts += [P[0].tolist(), P[-1].tolist()]
+    faces += [(c0, (j + 1) % sg, j) for j in range(sg)]
+    faces += [(c1, (L - 1) * sg + j, (L - 1) * sg + (j + 1) % sg) for j in range(sg)]
+    obj = mesh_from_data(name, verts, faces, coll)
+    _tag_tube(obj, centre.tolist(), dia * k)
+    return obj
+
+
+def mesh_from_data(name, verts, faces, coll=None, recalc_normals=True):
+    """Mesh object from vertex/face lists (metres, world = object space), validated and
+    with consistent outward normals (what the MANIFOLD solver needs)."""
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(v) for v in verts], [], [tuple(f) for f in faces])
+    me.validate()
+    if recalc_normals:
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(me)
+        bm.free()
+    return _link(bpy.data.objects.new(name, me), coll)
+
+
+def offset_copy(obj, dist, name=None, coll=None):
+    """Copy of a mesh with every vertex pushed dist (metres, world) along its normal
+    (grow > 0, shrink < 0).
+
+    For clearance gaps on doors and lids (cut the grown copy from the body). Faces move
+    by exactly dist (shell-factor offset, like Solidify's even thickness); fine for
+    convex or gently curved shapes, but concave corners can fold, so check the result.
+    Modifiers are baked; the copy keeps the original's world matrix.
+    """
+    dg = bpy.context.evaluated_depsgraph_get()
+    me = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.normal_update()
+    sc = obj.matrix_world.to_scale()
+    shift = [(v, v.normal.copy(), v.calc_shell_factor()) for v in bm.verts]
+    for v, n, k in shift:                 # shell factor: flat faces move exactly dist (even offset)
+        v.co += Vector(n[i] / sc[i] for i in range(3)) * dist * k
+    bm.to_mesh(me)
+    bm.free()
+    o = _link(bpy.data.objects.new(name or f"{obj.name}_offset", me),
+              coll or (obj.users_collection[0] if obj.users_collection else None))
+    o.matrix_world = obj.matrix_world.copy()
+    return o
 
 
 def weld(obj, dist=1e-5):
@@ -249,17 +386,211 @@ def mirror(obj, x=True, y=False, z=False, mirror_object=None):
     return obj
 
 
-def boolean(obj, cutter, operation="DIFFERENCE"):
-    """Boolean with a hidden helper cutter. Cutter is renamed with a '_' prefix so checks ignore it."""
-    if not cutter.name.startswith("_"):
-        cutter.name = "_" + cutter.name
-    cutter.display_type = "WIRE"
-    cutter.hide_render = True
+def available_solvers():
+    """Boolean solvers this Blender has, e.g. ['FLOAT', 'EXACT', 'MANIFOLD'] in 5.x
+    (FAST was renamed FLOAT in 5.0; MANIFOLD arrived in 4.5)."""
+    return [e.identifier for e in bpy.types.BooleanModifier.bl_rna.properties["solver"].enum_items]
+
+
+def is_closed(obj):
+    """True if the object's base mesh is watertight: every edge has exactly two faces."""
+    if obj.type != "MESH" or not obj.data.polygons:
+        return False
+    me = obj.data
+    le = np.empty(len(me.loops), np.int64)
+    me.loops.foreach_get("edge_index", le)
+    return bool(np.all(np.bincount(le, minlength=len(me.edges)) == 2))
+
+
+def winding_consistent(obj):
+    """True if every edge is used once in each direction, i.e. no face is flipped
+    against its neighbours. MANIFOLD silently returns the input unchanged otherwise."""
+    me = obj.data
+    nl, npoly = len(me.loops), len(me.polygons)
+    lv = np.empty(nl, np.int64)
+    me.loops.foreach_get("vertex_index", lv)
+    ls = np.empty(npoly, np.int64)
+    me.polygons.foreach_get("loop_start", ls)
+    lt = np.empty(npoly, np.int64)
+    me.polygons.foreach_get("loop_total", lt)
+    nxt = np.arange(nl) + 1
+    nxt[ls + lt - 1] = ls
+    key = lv * len(me.vertices) + lv[nxt]
+    return len(np.unique(key)) == nl
+
+
+def pick_solver(*objs, solver="AUTO"):
+    """MANIFOLD when available and every input is closed, else EXACT."""
+    if solver != "AUTO":
+        return solver
+    ok = "MANIFOLD" in available_solvers() and all(is_closed(o) for o in objs)
+    return "MANIFOLD" if ok else "EXACT"
+
+
+def boolean(obj, cutter, operation="DIFFERENCE", solver="AUTO"):
+    """Boolean with a hidden helper cutter. Cutter is renamed with a '_' prefix so checks ignore it.
+
+    cutter may be an object or a collection of cutters (one modifier for all of them,
+    which is much faster with MANIFOLD). solver "AUTO" picks MANIFOLD when available
+    and all inputs are closed meshes, else EXACT.
+    """
     m = obj.modifiers.new("Boolean", "BOOLEAN")
-    m.object = cutter
     m.operation = operation
-    m.solver = "EXACT"
+    if isinstance(cutter, bpy.types.Collection):
+        m.operand_type = "COLLECTION"
+        m.collection = cutter
+        inputs = [o for o in cutter.all_objects if o.type == "MESH"]
+        for o in inputs:
+            o.display_type = "WIRE"
+            o.hide_render = True
+    else:
+        if not cutter.name.startswith("_"):
+            cutter.name = "_" + cutter.name
+        cutter.display_type = "WIRE"
+        cutter.hide_render = True
+        m.object = cutter
+        inputs = [cutter]
+    m.solver = pick_solver(obj, *inputs, solver=solver)
     return obj
+
+
+def apply_cuts(target, cutters, op="DIFFERENCE", solver="AUTO", overshoot=0.001, fix_cutters=True,
+               fix_target=True):
+    """Apply one boolean of target against many cutters and bake it (no bpy.ops).
+
+    The scalable recipe from a 4.9M-triangle print job (about 1 min for 80+ cutters):
+    - cutters must be closed meshes (tube_mesh, box, mesh_from_data); with fix_cutters
+      their normals are recalculated so MANIFOLD accepts them. With fix_target, a target
+      with flipped faces gets its normals recalculated too (MANIFOLD otherwise returns
+      it unchanged). Only ever run this on a working copy, never the frozen master.
+    - solver "AUTO": MANIFOLD when available and every input is closed, else EXACT
+    - display-only WeightedNormal modifiers on target are switched off while baking;
+      the rest of target's modifier stack is baked in
+    - overshoot (metres; None skips): cutter vertices closer to target's skin than this
+      are reported. A cutter face that stops at (or 0.01 mm past) the skin leaves a
+      paper-thin skin that seals the pocket; end every cutter >= 1 mm through.
+    Order a full assembly as: union/ADD -> splits (doors, lids) -> body cuts -> part cuts.
+    Then run verify_cuts (shells, skin openings, tunnels open).
+
+    Returns {"solver", "faces_before", "faces_after", "seconds", "warnings"}.
+    """
+    t0 = time.time()
+    cutters = [c for c in cutters if c is not None]
+    warnings = []
+    if fix_cutters:
+        for c in cutters:
+            if c.type == "MESH":
+                bm = bmesh.new()
+                bm.from_mesh(c.data)
+                bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+                bm.to_mesh(c.data)
+                bm.free()
+    if fix_target and target.type == "MESH" and not winding_consistent(target):
+        if target.data.users > 1:
+            target.data = target.data.copy()
+        bm = bmesh.new()
+        bm.from_mesh(target.data)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(target.data)
+        bm.free()
+        warnings.append(f"target '{target.name}' had flipped faces; recalculated its normals on this copy "
+                        "(MANIFOLD needs consistent winding)")
+    open_ = [c.name for c in cutters if not is_closed(c)]
+    if open_:
+        warnings.append(f"open (non-watertight) cutters: {', '.join(open_[:8])}{' ...' if len(open_) > 8 else ''}")
+    if overshoot:
+        warnings += _overshoot_warnings(target, cutters, overshoot)
+    s = pick_solver(target, *cutters, solver=solver)
+    faces_before = len(target.data.polygons)
+    verts_before = len(target.data.vertices)
+    col = bpy.data.collections.new("_cuts_tmp")
+    bpy.context.scene.collection.children.link(col)
+    for c in cutters:
+        col.objects.link(c)
+    saved = [(m, m.show_viewport, m.show_render) for m in target.modifiers if m.type == "WEIGHTED_NORMAL"]
+    for m, _, _ in saved:
+        m.show_viewport = m.show_render = False
+    m = target.modifiers.new("_cuts", "BOOLEAN")
+    m.operation = op
+    m.operand_type = "COLLECTION"
+    m.collection = col
+    m.solver = s
+    try:
+        dg = bpy.context.evaluated_depsgraph_get()
+        dg.update()
+        me = bpy.data.meshes.new_from_object(target.evaluated_get(dg))
+    finally:
+        target.modifiers.remove(m)
+        for c in cutters:
+            col.objects.unlink(c)
+        bpy.data.collections.remove(col)
+    old = target.data
+    for mm in [mm for mm in target.modifiers if mm.type != "WEIGHTED_NORMAL"]:
+        target.modifiers.remove(mm)
+    for mm, v, r in saved:
+        mm.show_viewport, mm.show_render = v, r
+    name = old.name
+    target.data = me
+    if old.users == 0:
+        bpy.data.meshes.remove(old)
+    me.name = name
+    out = {"solver": s, "op": op, "cutters": len(cutters), "faces_before": faces_before,
+           "faces_after": len(me.polygons), "seconds": round(time.time() - t0, 2), "warnings": warnings}
+    if not me.polygons:
+        out["warnings"].append("boolean result is EMPTY (check cutter normals/closure, or try solver='EXACT')")
+    elif len(me.polygons) == faces_before and len(me.vertices) == verts_before and cutters:
+        out["warnings"].append("boolean changed nothing: cutters miss the target, or the solver rejected "
+                               "the input (non-manifold / flipped faces); try solver='EXACT' to compare")
+    import sys
+    if "hostkit" in sys.modules:
+        sys.modules["hostkit"].clear_cache(target)
+    return out
+
+
+def _overshoot_warnings(target, cutters, overshoot, max_verts=4000):
+    import hostkit
+    saved = hostkit.UNITS
+    hostkit.set_units("m")
+    try:
+        H = hostkit.host_bvh(target)
+        warn = []
+        for c in cutters:
+            V = hostkit.world_verts(c)
+            if len(V) > max_verts:
+                V = V[np.linspace(0, len(V) - 1, max_verts).astype(int)]
+            _, d = hostkit.nearest(V, H)
+            near = d < overshoot
+            if near.any():
+                i = int(np.argmin(np.where(near, d, np.inf)))
+                warn.append(f"OVERSHOOT: cutter '{c.name}' has {int(near.sum())} vertices within "
+                            f"{overshoot * 1000:.2f} mm of the skin (closest {d[i] * 1000:.3f} mm at "
+                            f"({V[i][0]:.4f}, {V[i][1]:.4f}, {V[i][2]:.4f})); extend it at least "
+                            f"{overshoot * 1000:.1f} mm through or it may leave a sealing skin")
+        return warn
+    finally:
+        hostkit.set_units(saved)
+
+
+def scale_scene(factor, pivot=(0, 0, 0), objects=None, roots_only=True):
+    """Scale objects about pivot by changing world matrices.
+
+    roots_only (default): only objects without a parent are scaled; children follow
+    their parents. Scaling every object double-scales children (a parented lid ended
+    up 860 mm out of place). Keep purchased hardware at real size: scale the body,
+    then rebuild hardware from real dimensions. Verify bounds afterwards.
+    Returns the scaled objects.
+    """
+    objs = list(objects) if objects is not None else list(bpy.context.scene.objects)
+    p = Vector(pivot)
+    S = Matrix.Translation(p) @ Matrix.Scale(factor, 4) @ Matrix.Translation(-p)
+    done = []
+    for o in objs:
+        if roots_only and o.parent is not None:
+            continue
+        o.matrix_world = S @ o.matrix_world
+        done.append(o)
+    bpy.context.view_layer.update()
+    return done
 
 
 def apply_modifiers(obj):
@@ -431,13 +762,48 @@ def assign(obj, mat):
 
 # ---------------------------------------------------------------- presentation
 
+def object_corners(obj, depsgraph=None):
+    """8 world-space corners of the object's local box, from its EVALUATED vertices.
+
+    Don't use obj.bound_box: for curves Blender 5.2 pads it by about 1 m, so any
+    scene with tubes or cables gets framed 2-3x too wide. Falls back to bound_box only
+    when there is no mesh data (empties, an empty boolean result).
+    """
+    depsgraph = depsgraph or bpy.context.evaluated_depsgraph_get()
+    ev = obj.evaluated_get(depsgraph)
+    co = None
+    if obj.type == "MESH" and not obj.modifiers and not obj.data.shape_keys:
+        me = obj.data
+        if len(me.vertices):
+            co = np.empty(len(me.vertices) * 3)
+            me.vertices.foreach_get("co", co)
+    else:
+        try:
+            me = ev.to_mesh()
+        except RuntimeError:
+            me = None
+        if me is not None:
+            if len(me.vertices):
+                co = np.empty(len(me.vertices) * 3)
+                me.vertices.foreach_get("co", co)
+            ev.to_mesh_clear()
+    if co is None:
+        local = [Vector(c) for c in ev.bound_box]
+    else:
+        co = co.reshape(-1, 3)
+        lo, hi = co.min(0), co.max(0)
+        local = [Vector((x, y, z)) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    return [ev.matrix_world @ c for c in local]
+
+
 def bounds(objs=None):
-    objs = objs or [o for o in bpy.context.scene.objects if o.type == "MESH" and not o.name.startswith("_")]
+    """World (lo, hi) of the objects' evaluated geometry (default: visible meshes and curves)."""
+    objs = objs or [o for o in bpy.context.scene.objects
+                    if o.type in {"MESH", "CURVE", "SURFACE", "FONT", "META"} and not o.name.startswith("_")]
     depsgraph = bpy.context.evaluated_depsgraph_get()
     pts = []
     for o in objs:
-        ev = o.evaluated_get(depsgraph)
-        pts += [ev.matrix_world @ Vector(c) for c in ev.bound_box]
+        pts += object_corners(o, depsgraph)
     lo = Vector((min(p[i] for p in pts) for i in range(3)))
     hi = Vector((max(p[i] for p in pts) for i in range(3)))
     return lo, hi
