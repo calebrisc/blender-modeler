@@ -17,6 +17,10 @@ Tests:
             check, cut verification and a context render from the command line
     setup   setup_blender_mcp sandbox detection and port-owner lookup (no Blender,
             never connects to the MCP port)
+    exportkit  hidden-face removal (buried / half-sunk / open / multi-island parts, UVs
+            kept, mesh integrity), set_origin, lightmap UV2, glTF export + re-import
+            (triangles, size, normals, tangents, UV sets, textures, extras), errors
+    exportcli  bmod.py --script exportkit.py inspect on that file (pass and fail)
 
 Prints each check and the review images to look at; exit code 1 if any failed.
 """
@@ -122,6 +126,21 @@ def test_setup(exe, out):
     return ok1 and ok2, lines
 
 
+def test_exportcli(exe, out):
+    glb = os.path.join(out, "export_test.glb")
+    if not os.path.isfile(glb):
+        return False, ["FAIL exportcli: run the exportkit test first (needs export_test.glb)"]
+    kit = os.path.join(SCRIPTS, "exportkit.py")
+    code, log = bmod(["--script", kit, "--", "inspect", glb, "--uv2"])
+    ok1 = code == 0 and "GLTF CHECK: 0 errors" in log
+    lines = [f"{'PASS' if ok1 else 'FAIL'} exportkit inspect (independent process): exit {code}"]
+    code2, log2 = bmod(["--script", kit, "--", "inspect", glb, "--size", "9", "9", "9"])
+    ok2 = code2 == 1 and "size off" in log2
+    lines.append(f"{'PASS' if ok2 else 'FAIL'} exportkit inspect fails on a wrong size: exit {code2}")
+    lines += [l.strip() for l in log.splitlines() if l.startswith("GLTF:")]
+    return ok1 and ok2, lines
+
+
 TESTS = {
     "basics": lambda exe, out: blender_test(exe, "test_basics.py", out),
     "host": lambda exe, out: blender_test(exe, "test_host_pipeline.py", out),
@@ -129,6 +148,8 @@ TESTS = {
     "script": test_script,
     "hostcli": test_hostcli,
     "setup": test_setup,
+    "exportkit": lambda exe, out: blender_test(exe, "test_exportkit.py", out),
+    "exportcli": test_exportcli,
 }
 
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+- New `scripts/exportkit.py` for handing a model to a game engine or another
+  tool: `remove_hidden_faces` (faces buried in or flush against other closed
+  parts, islands of one object included, open meshes never hide anything;
+  UVs/normals of the rest untouched; `dry_run=True` previews, shared meshes
+  are refused), `set_origin` (pivot without moving the
+  geometry), `lightmap_uv` (Smart UV Project + pack into a second UV set,
+  first layer untouched) and `uv_overlap` (texel-level overlap/coverage),
+  `export_gltf` (.glb/.gltf of exactly the given objects, temporary
+  triangulation for tangents, options checked against the installed
+  exporter), `read_gltf_json`, `inspect_gltf` (file-level attributes and
+  texture slots plus a re-import that leaves the scene as it was) and
+  `check_gltf`; `bmod.py --script exportkit.py -- inspect file.glb [--size X Y Z]
+  [--tris N] [--uv2]` checks a file in its own Blender process (exit 1 on
+  errors). Docs: techniques.md § Game / glTF hand-off. New tests `exportkit`
+  and `exportcli`.
+
 ## 0.3.0 (2026-10-22)
 From a review of a 7-hour session that added LED wiring, vaults and ballast to
 a 4.9M-triangle figure. Most of the helpers that session had to write are now

@@ -154,6 +154,24 @@
   (`mk.offset_copy(split_cutter, 0.0003)`).
 - Always verify afterwards: shells, skin openings, tunnels open (`verify_cuts`).
 
+## Game / glTF hand-off (exportkit)
+- Procedural node materials don't survive glTF: engines get image textures
+  (base colour, metallic-roughness, normal) on real UVs (`uv_tile=` on
+  `lathe`/`tube_mesh`, or your own projection).
+- Order: `mk.apply_modifiers` → `ek.remove_hidden_faces(parts)` (do it last:
+  meshes may become open) → join static parts → `ek.set_origin` for parts the
+  game moves → `ek.lightmap_uv` → `ek.export_gltf`.
+- `remove_hidden_faces` deletes faces buried in, or flush against, other closed
+  parts (welded tube ends, washer/bolt undersides, label backs); on a 28k-tri
+  prop it removed ~18 % of the triangles with no visible change.
+- `export_gltf` triangulates through temporary modifiers (tangents need tris),
+  exports exactly the objects you pass and restores the selection; custom
+  properties become node extras (engines import them as metadata).
+- Verify the file, not the scene: `ek.inspect_gltf` re-imports it and reports
+  triangles, size, NORMAL/TANGENT/TEXCOORD_n and texture slots;
+  `ek.check_gltf(rep, size=..., tris=...)` turns that into errors. From the
+  command line it runs in its own Blender process.
+
 ## Rescaling a finished model
 - Scale root objects only; children follow (`mk.scale_scene(f, roots_only=True)`).
   Scaling every object double-scales parented ones (a lid ended up 860 mm out
