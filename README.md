@@ -191,6 +191,7 @@ scripts/routekit.py             route channels through a host
 scripts/check_channels.py       wall, bend, keep-out, loose-end, connectivity and fill checks
 scripts/verify_cuts.py          post-boolean verification
 scripts/portkit.py              port files: dump a collection live, rebuild headless
+scripts/exportkit.py            game/glTF hand-off: hidden faces, pivots, UV2, export, verification
 tests/run_tests.py              regression tests (drives Blender headless)
 ```
 

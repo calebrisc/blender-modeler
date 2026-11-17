@@ -41,6 +41,7 @@ absolute path in every command.
 | `check_channels.py` | channels vs host: wall to skin, bend radius, keep-out clearance, loose ends, hub connectivity, fill % |
 | `verify_cuts.py` | after booleans: watertight shells, skin openings (intended vs not), tunnels open, cavities empty, fused parts |
 | `portkit.py` | dump a collection to JSON live, rebuild it as a port .blend headless |
+| `exportkit.py` | hand-off to game engines/other tools: `remove_hidden_faces`, `set_origin` (pivots), `lightmap_uv` (non-overlapping UV2) + `uv_overlap`, `export_gltf` (.glb/.gltf), `inspect_gltf`/`check_gltf` (re-import and verify; also `bmod.py --script exportkit.py -- inspect file.glb`) |
 
 Read `<skill>/references/techniques.md` before writing a model script. It has
 the craft rules and Blender API gotchas.
@@ -213,6 +214,9 @@ variation and bump > 0. Never leave flat colours. Run `--mode shaded`.
 Run `mk.studio()` (or a custom camera and lights), then `--final final.png`.
 Show the user the final image and `model.blend`. In live mode, build it in
 their Blender.
+For a game asset or any glTF hand-off, follow `techniques.md` § Game / glTF
+hand-off (headless): image textures on real UVs, bake modifiers, remove hidden
+faces, pivots, UV2, export, then verify the exported file, not the scene.
 
 ### The critique loop (every iteration)
 1. Run bmod.py. Read the report, then look at the sheet image.
