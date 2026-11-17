@@ -18,7 +18,7 @@ millions of triangles, writing port files, rescaling a master):
 
 All other arguments are passed to run_pipeline.py (--model, --blend, --out,
 --spec, --mode, --res, --collection, --context, --focus, --section, --color-by,
---min-line-px, --channels, --verify, --final, --no-render, --no-check, --no-save).
+--views, --min-line-px, --channels, --verify, --final, --no-render, --no-check, --no-save).
 
 Blender is found from, in order: --blender PATH, $BLENDER_EXE, $BLENDER_PATH,
 `blender` on PATH, then the standard install locations (newest version wins).
@@ -164,7 +164,7 @@ def main():
         with open(report, encoding="utf-8") as f:
             text = f.read()
         print(text)
-        if text.startswith(("MODEL SCRIPT FAILED", "SCRIPT FAILED")):
+        if text.startswith(("MODEL SCRIPT FAILED", "SCRIPT FAILED", "ARGUMENTS FAILED")):
             return 1
         code = 2 if sum(int(n) for n in CHECKS.findall(text)) > 0 else 0
         for s in sorted(glob.glob(os.path.join(out_dir, "*_sheet.png"))):

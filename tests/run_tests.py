@@ -10,7 +10,9 @@ Tests:
             rotation/scale: find pockets, route channels, check_channels (incl. a
             deliberate loose end, thin wall and overfull channel), MANIFOLD cuts
             with a deliberately short cutter, verify_cuts, context/section renders
+    views   render_views presets ("six" incl. the LEFT view), validation of view names
     chair   the classic new-object loop through bmod.py (model.py + spec.json)
+    viewscli  bmod.py --views six on the chair, and a bad --views name failing fast
     script  bmod.py --script on a .blend with --save-as (and its refusal to
             overwrite the opened file)
     hostcli bmod.py on the host test's scene: scoped geometry check, channel
@@ -90,6 +92,22 @@ def test_script(exe, out):
     return ok1 and ok2 and ok3, lines
 
 
+def test_viewscli(exe, out):
+    fx = os.path.join(HERE, "fixtures", "chair")
+    d = os.path.join(out, "viewscli")
+    base = ["--model", os.path.join(fx, "model.py"), "--spec", os.path.join(fx, "spec.json"), "--mode", "clay",
+            "--res", "192", "--no-save"]
+    code, log = bmod(base + ["--out", d, "--views", "six"])
+    names = ["front", "back", "right", "left", "top", "three_quarter_left"]
+    ok1 = code == 0 and all(os.path.isfile(os.path.join(d, f"clay_{n}.png")) for n in names)
+    lines = [f"{'PASS' if ok1 else 'FAIL'} bmod --views six: exit {code}, 6 renders "
+             f"{all(os.path.isfile(os.path.join(d, f'clay_{n}.png')) for n in names)}"]
+    code2, log2 = bmod(base + ["--out", d + "_bad", "--views", "front,lft"])
+    ok2 = code2 == 1 and "ARGUMENTS FAILED" in log2 and "lft" in log2
+    lines.append(f"{'PASS' if ok2 else 'FAIL'} bmod --views with a bad name fails fast: exit {code2}")
+    return ok1 and ok2, lines
+
+
 def test_hostcli(exe, out):
     blend = os.path.join(out, "host_scene.blend")
     if not os.path.isfile(blend):
@@ -125,7 +143,9 @@ def test_setup(exe, out):
 TESTS = {
     "basics": lambda exe, out: blender_test(exe, "test_basics.py", out),
     "host": lambda exe, out: blender_test(exe, "test_host_pipeline.py", out),
+    "views": lambda exe, out: blender_test(exe, "test_views.py", out),
     "chair": test_chair,
+    "viewscli": test_viewscli,
     "script": test_script,
     "hostcli": test_hostcli,
     "setup": test_setup,

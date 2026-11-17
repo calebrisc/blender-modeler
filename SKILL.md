@@ -34,7 +34,7 @@ absolute path in every command.
 | `bmod.py` | **entry point.** Finds Blender, runs one iteration headless, prints a short summary. `--script` runs any script on a .blend in the background |
 | `modelkit.py` | build helpers with good defaults: `box`, `cylinder`, `sphere`, `lathe`, `extrude_profile`, `tube`, `tube_mesh` (watertight, for cutters), `finish` (bevel + weighted normals + smooth), `subsurf`, `solidify`, `array`, `mirror`, `boolean`/`apply_cuts` (MANIFOLD when possible), `offset_copy`, `scale_scene`, `material`, `wood`/`assign_wood`, `studio`, `render_final` |
 | `check_geometry.py` | floating parts, gaps, contacts (flush vs embedded depth), mesh health, spec dimensions and required attachments |
-| `render_views.py` | 8 fixed views tiled into one sheet; `clay` (Workbench, random colour per part) or `shaded` (EEVEE); context/ghost, cutaway and close-up options; `live_view()` for the user's viewport |
+| `render_views.py` | 8 fixed views tiled into one sheet; `clay` (Workbench, random colour per part) or `shaded` (EEVEE); context/ghost, cutaway and close-up options; `views="six"` (front, back, right, left, top, 3/4) for hand-off pages; `live_view()` for the user's viewport |
 | `run_pipeline.py` | runs inside Blender: reset scene → run model.py → check → render → save model.blend |
 | `hostkit.py` | measure an existing mesh: world vertices, ray-parity inside/outside, wall thickness, voxel clearance field, pocket finder, ray scans |
 | `routekit.py` | route channels through a host: clearance-weighted shortest paths, smoothing, bend radii, junction snapping |
@@ -54,7 +54,7 @@ Use `python3` where `python` isn't available. Run `bmod.py --where` once to
 confirm which Blender it found. If none is found, ask the user for the path and
 pass `--blender PATH` (or set `BLENDER_EXE`).
 
-Options: `--mode clay|shaded|both|none`, `--res 512`, `--final path.png` (Cycles
+Options: `--mode clay|shaded|both|none`, `--res 512`, `--views six` (or a comma list of view names), `--final path.png` (Cycles
 presentation render, using `modelkit.studio()` if the scene has no camera),
 `--no-render`, `--no-check`, `--verbose` (full Blender log, also saved as
 `<out>/blender.log`), `--timeout SECONDS`. It takes about 5–15 s for clay and a

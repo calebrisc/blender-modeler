@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- `render_views`: a LEFT view and view presets (`views="six"`: front, back,
+  right, left, top, 3/4 left as a 3 x 2 sheet, the usual set for hand-off
+  pages). The default 8-view review sheet is unchanged. Unknown view names
+  used to be dropped silently (an all-unknown list crashed while writing an
+  empty sheet); `resolve_views()` now raises `ValueError` before the scene is
+  touched. `run_pipeline`/`bmod.py --views six|name,name` exposes it; a bad
+  name stops the run up front with `ARGUMENTS FAILED` (exit 1). New tests
+  `views` and `viewscli` (LEFT checked as the mirror image of RIGHT).
+
 ## 0.3.0 (2026-10-22)
 From a review of a 7-hour session that added LED wiring, vaults and ballast to
 a 4.9M-triangle figure. Most of the helpers that session had to write are now

@@ -67,6 +67,7 @@ def main():
     ap.add_argument("--focus", default="target", help="target | all | comma-separated names")
     ap.add_argument("--section", help="cutaway, e.g. y,0.0 (removes y < 0) or -x,0.1")
     ap.add_argument("--color-by", default="object", choices=["object", "material", "role"])
+    ap.add_argument("--views", help="view preset (default | six) or comma-separated view names")
     ap.add_argument("--min-line-px", type=float, default=0)
     ap.add_argument("--final", help="also render a presentation image (Cycles) to this path")
     ap.add_argument("--channels", help="spec with a 'channels' key (default: --spec if it has one)")
@@ -84,6 +85,16 @@ def main():
     out = os.path.abspath(a.out) if a.out else None
     if out:
         os.makedirs(out, exist_ok=True)
+    views = None
+    if a.views:                      # validate before building anything
+        views = a.views if a.views in render_views.PRESETS else [v.strip() for v in a.views.split(",")]
+        try:
+            render_views.resolve_views(views)
+        except ValueError as ex:
+            msg = f"ARGUMENTS FAILED\n--views: {ex}\n"
+            _write(out, "report.txt", msg)
+            print(msg)
+            sys.exit(1)
 
     blend = os.path.abspath(a.blend) if a.blend else None
     if blend:
@@ -156,7 +167,7 @@ def main():
         for m in (["clay", "shaded"] if mode == "both" else [mode]):
             render_views.run(out, mode=m, res=a.res, collection=a.collection, context=ctx,
                              ghost=not a.no_ghost, focus=focus, section=section,
-                             color_by=a.color_by, min_line_px=a.min_line_px)
+                             color_by=a.color_by, min_line_px=a.min_line_px, views=views)
 
     if a.final:
         if bpy.context.scene.camera is None:
