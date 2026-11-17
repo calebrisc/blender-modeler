@@ -7,6 +7,9 @@ Sheet layout (4 x 2), always the same so critiques can name views:
 
 Front looks from -Y toward +Y (Blender's numpad 1), Z is up.
 
+views="six" renders the classic orthographic set plus one perspective, as a 3 x 2
+sheet: FRONT | BACK | RIGHT / LEFT | TOP | 3/4 L (for hand-off pages and reports).
+
 Modes:
     clay    Workbench, studio light, cavity + outline, random colour per object.
             Fast; shows form, part boundaries and proportions.
@@ -23,8 +26,10 @@ Context renders (features inside or on an existing model):
     min_line_px  thicken thin tubes for display only (curves and tube_mesh objects).
     color_by  "object" (random per object), "material", or "role" (custom prop "role"
               on each object: channel, cut, part, magnet, keepout, ballast, ...).
-    views=    names from VIEWS, or your own (name, azimuth, elevation, ortho) tuples for
-              close-ups; combine with focus=(lo, hi) on the changed area.
+    views=    a preset name from PRESETS ("default", "six"), names from VIEWS (incl.
+              "left", not in the default sheet), or your own (name, azimuth, elevation,
+              ortho) tuples for close-ups; combine with focus=(lo, hi) on the changed area.
+              Unknown names raise ValueError before anything is rendered.
 
 Runs inside Blender:
 
@@ -59,7 +64,12 @@ VIEWS = [
     ("three_quarter_right", 35, 22, False),
     ("three_quarter_back", 150, 28, False),
     ("low_hero", 20, 6, False),
+    ("left", -90, 0, True),          # not in the default sheet (use views="six" or ["left"])
 ]
+DEFAULT_VIEWS = ["front", "right", "back", "top", "three_quarter_left", "three_quarter_right",
+                 "three_quarter_back", "low_hero"]
+PRESETS = {"default": DEFAULT_VIEWS,
+           "six": ["front", "back", "right", "left", "top", "three_quarter_left"]}
 COLS = 4
 BG = (0.32, 0.32, 0.34)
 GHOST_COLOR = (0.85, 0.85, 0.88)
@@ -209,8 +219,34 @@ def _save_rgb(arr, path):
     bpy.data.images.remove(img)
 
 
+def resolve_views(views=None):
+    """List of (name, azimuth, elevation, ortho) from a preset name, VIEWS names and/or
+    custom tuples. Raises ValueError for an unknown name or a malformed tuple."""
+    if views is None:
+        views = DEFAULT_VIEWS
+    elif isinstance(views, str):
+        if views not in PRESETS:
+            raise ValueError(f"unknown view preset {views!r}; presets: {sorted(PRESETS)}")
+        views = PRESETS[views]
+    table = {v[0]: v for v in VIEWS}
+    out = []
+    for v in views:
+        if isinstance(v, str):
+            if v not in table:
+                raise ValueError(f"unknown view {v!r}; known: {sorted(table)} or presets {sorted(PRESETS)}")
+            out.append(table[v])
+        else:
+            v = tuple(v)
+            if len(v) != 4:
+                raise ValueError(f"custom view must be (name, azimuth, elevation, ortho), got {v!r}")
+            out.append(v)
+    if not out:
+        raise ValueError("no views to render")
+    return out
+
+
 def _write_sheet(tiles, res, out_path):
-    cols = min(COLS, len(tiles))
+    cols = 3 if len(tiles) in (5, 6) else min(COLS, len(tiles))
     rows = math.ceil(len(tiles) / cols)
     pad = 4
     W, H = cols * res + (cols + 1) * pad, rows * res + (rows + 1) * pad
@@ -282,6 +318,7 @@ def run(out_dir, mode="clay", res=512, collection=None, names=None, views=None,
         focus="target", section=None, min_line_px=0, color_by="object"):
     scene = bpy.context.scene
     r = scene.render
+    view_list = resolve_views(views)
     os.makedirs(out_dir, exist_ok=True)
     objs = check_geometry.target_objects(collection, names)
     if not objs:
@@ -385,12 +422,6 @@ def run(out_dir, mode="clay", res=512, collection=None, names=None, views=None,
         else:
             raise ValueError("mode must be 'clay' or 'shaded'")
 
-        view_list = []
-        for v in (views or [v[0] for v in VIEWS]):
-            if isinstance(v, str):
-                view_list += [x for x in VIEWS if x[0] == v]
-            else:
-                view_list.append(tuple(v))
         tiles = []
         for name, az, el, ortho in view_list:
             _place_camera(cam, center, radius, corners, az, el, ortho)
