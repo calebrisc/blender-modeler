@@ -6,6 +6,8 @@
 
 Tests:
     basics  curve bounds (the bound_box bug), hostkit, routekit, modelkit helpers
+    uv      lathe / tube_mesh UVs (uv_tile) and closed loops, invalid inputs, UVs
+            through bevel + bake, before/after checker renders
     host    synthetic 380k-triangle host with flipped faces and an unapplied
             rotation/scale: find pockets, route channels, check_channels (incl. a
             deliberate loose end, thin wall and overfull channel), MANIFOLD cuts
@@ -124,6 +126,7 @@ def test_setup(exe, out):
 
 TESTS = {
     "basics": lambda exe, out: blender_test(exe, "test_basics.py", out),
+    "uv": lambda exe, out: blender_test(exe, "test_uv_builders.py", out),
     "host": lambda exe, out: blender_test(exe, "test_host_pipeline.py", out),
     "chair": test_chair,
     "script": test_script,

@@ -32,7 +32,7 @@ absolute path in every command.
 | file in `<skill>/scripts/` | what it does |
 |---|---|
 | `bmod.py` | **entry point.** Finds Blender, runs one iteration headless, prints a short summary. `--script` runs any script on a .blend in the background |
-| `modelkit.py` | build helpers with good defaults: `box`, `cylinder`, `sphere`, `lathe`, `extrude_profile`, `tube`, `tube_mesh` (watertight, for cutters), `finish` (bevel + weighted normals + smooth), `subsurf`, `solidify`, `array`, `mirror`, `boolean`/`apply_cuts` (MANIFOLD when possible), `offset_copy`, `scale_scene`, `material`, `wood`/`assign_wood`, `studio`, `render_final` |
+| `modelkit.py` | build helpers with good defaults: `box`, `cylinder`, `sphere`, `lathe` (optional `uv_tile` UVs, `closed` loops), `extrude_profile`, `tube`, `tube_mesh` (watertight, for cutters; optional `uv_tile`, `closed`), `finish` (bevel + weighted normals + smooth), `subsurf`, `solidify`, `array`, `mirror`, `boolean`/`apply_cuts` (MANIFOLD when possible), `offset_copy`, `scale_scene`, `material`, `wood`/`assign_wood`, `studio`, `render_final` |
 | `check_geometry.py` | floating parts, gaps, contacts (flush vs embedded depth), mesh health, spec dimensions and required attachments |
 | `render_views.py` | 8 fixed views tiled into one sheet; `clay` (Workbench, random colour per part) or `shaded` (EEVEE); context/ghost, cutaway and close-up options; `live_view()` for the user's viewport |
 | `run_pipeline.py` | runs inside Blender: reset scene → run model.py → check → render → save model.blend |

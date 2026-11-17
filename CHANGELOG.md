@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+- `modelkit.lathe(uv_tile=, closed=)` and `modelkit.tube_mesh(uv_tile=, closed=)`:
+  optional seamless cylindrical UVs at a constant texel density (u in whole
+  repeats around, v along the profile / arc length; tube caps as discs) for
+  image textures and exported game assets, and closed loops (rings, gaskets,
+  wire hoops) that are watertight without a weld; a closed `tube_mesh` spreads
+  the parallel-transport twist along the loop so the seam has no kink. Both
+  are opt-in: without the new arguments the output is unchanged (no UV layer,
+  same topology). Invalid input (too few points, a closed profile on the axis,
+  `end_ext` on a loop, `uv_tile <= 0`) raises `ValueError`.
+  `mesh_from_data(uvs=)` writes per-corner UVs. New test `uv`
+  (`tests/test_uv_builders.py`) with before/after checker renders.
+
 ## 0.3.0 (2026-10-22)
 From a review of a 7-hour session that added LED wiring, vaults and ballast to
 a 4.9M-triangle figure. Most of the helpers that session had to write are now
