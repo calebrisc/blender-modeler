@@ -23,7 +23,8 @@
   bowls, lamp bases, knobs, turned legs, wheels, cups). The profile is
   `[(radius, z), …]` from bottom to top. Start and end at radius 0 for a solid.
   For a hollow vessel, go up the outside, across the rim, and down the inside
-  (rim thickness = wall).
+  (rim thickness = wall). `closed=True` spins a loop profile (ring, gasket,
+  band clamp, tyre) into a watertight torus.
 - **extrude_profile(points, depth):** shapes defined by an outline (brackets,
   chair side frames, signs, gears, letters, cut-outs). Points go
   counter-clockwise. Rotate the result to stand it up (`rotation=(90, 0, 0)`
@@ -42,6 +43,11 @@
   input is closed, else EXACT (§ Booleans at scale).
 - **tube_mesh(points, dia):** a watertight tube for boolean cutters and
   channels (curve tubes converted to mesh are not reliably closed).
+  `closed=True` for wire rings and hoops (no caps, no twist kink at the seam).
+- **UVs for textured output (games, image textures, glTF):** `lathe` and
+  `tube_mesh` take `uv_tile=` (length per texture repeat) and write seamless
+  cylindrical UVs at a constant texel density. Procedural materials need no UVs;
+  image textures and exported assets do.
 - **array / mirror:** slats, spokes, rungs, bolts, symmetric halves. Model one
   half and mirror it.
 

@@ -97,17 +97,39 @@ def sphere(name, radius, location=(0, 0, 0), rotation=(0, 0, 0), segments=48, ri
     return _object_from_bmesh(name, bm, location, rotation, coll)
 
 
-def lathe(name, profile, location=(0, 0, 0), rotation=(0, 0, 0), segments=64, coll=None):
+def lathe(name, profile, location=(0, 0, 0), rotation=(0, 0, 0), segments=64, coll=None, uv_tile=None,
+          closed=False):
     """Spin a profile [(radius, z), ...] around local Z. Bottom to top.
 
     Use for anything turned: vases, bottles, lamp bases, table legs, knobs.
     Start/end the profile at radius 0 to get closed caps.
     Built directly as rings (bmesh spin gets very slow above ~100k faces).
+
+    uv_tile (metres per texture repeat, optional): also write a "UVMap" with
+    cylindrical UVs: u around (rounded to whole repeats so the seam matches), v along
+    the profile length, at a constant texel density. Without it no UV layer is made
+    (the previous behaviour).
+    closed: the profile is a loop (ring, gasket, band clamp, tyre); the last point
+    joins the first, so the result is watertight without a weld. It must stay off
+    the axis.
+    Raises ValueError for fewer than 2 distinct points (3 when closed), a closed
+    profile that touches the axis, or uv_tile <= 0.
     """
     prof = []
     for r, z in profile:
         if not prof or abs(prof[-1][0] - r) > 1e-9 or abs(prof[-1][1] - z) > 1e-9:
             prof.append((float(r), float(z)))
+    if closed:
+        if len(prof) > 1 and abs(prof[0][0] - prof[-1][0]) < 1e-9 and abs(prof[0][1] - prof[-1][1]) < 1e-9:
+            prof.pop()
+        if len(prof) < 3:
+            raise ValueError(f"{name}: a closed lathe profile needs at least 3 distinct points")
+        if any(abs(r) < 1e-9 for r, _ in prof):
+            raise ValueError(f"{name}: a closed lathe profile must not touch the axis (radius 0)")
+    elif len(prof) < 2:
+        raise ValueError(f"{name}: a lathe profile needs at least 2 distinct points")
+    if uv_tile is not None and not uv_tile > 0:
+        raise ValueError(f"{name}: uv_tile must be > 0 (metres per texture repeat)")
     ang = np.linspace(0.0, math.tau, segments, endpoint=False)
     cs, sn = np.cos(ang), np.sin(ang)
     verts, rings = [], []
@@ -118,16 +140,33 @@ def lathe(name, profile, location=(0, 0, 0), rotation=(0, 0, 0), segments=64, co
         else:
             rings.append(np.arange(len(verts), len(verts) + segments))
             verts += list(zip(r * cs, r * sn, np.full(segments, z)))
-    faces = []
+    pts = prof + [prof[0]] if closed else prof
+    if closed:
+        rings.append(rings[0])                  # the seam ring is ring 0 itself: watertight
+    s = np.r_[0.0, np.cumsum([math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts[:-1], pts[1:])])]
+    faces, uvs = [], []
     nxt = np.roll(np.arange(segments), -1)
-    for a, b in zip(rings[:-1], rings[1:]):
-        for q in np.stack([a, a[nxt], b[nxt], b], 1).tolist():
-            f = [v for i, v in enumerate(q) if v != q[i - 1]]   # collapse pole duplicates
+    for k, (a, b) in enumerate(zip(rings[:-1], rings[1:])):
+        for j, q in enumerate(np.stack([a, a[nxt], b[nxt], b], 1).tolist()):
+            quv = [(j, s[k]), (j + 1, s[k]), (j + 1, s[k + 1]), (j, s[k + 1])]
+            f, fu = [], []
+            for i, v in enumerate(q):           # collapse pole duplicates
+                if v == q[i - 1]:
+                    if f:                       # pole: one corner at the middle of the span
+                        fu[-1] = ((fu[-1][0] + quv[i][0]) / 2, fu[-1][1])
+                    continue
+                f.append(v)
+                fu.append(quv[i])
             if len(f) >= 3:
                 faces.append(f)
+                uvs.append(fu)
     me = bpy.data.meshes.new(name)
     me.from_pydata(verts, [], faces)
-    me.validate()
+    if uv_tile:
+        U = max(1, round(math.tau * max(r for r, _ in prof) / uv_tile))
+        flat = [(j * U / segments, sv / uv_tile) for fu in uvs for j, sv in fu]
+        me.uv_layers.new(name="UVMap").data.foreach_set("uv", np.asarray(flat, np.float32).ravel())
+    me.validate(clean_customdata=not uv_tile)
     bm = bmesh.new()
     bm.from_mesh(me)
     bpy.data.meshes.remove(me)
@@ -200,7 +239,7 @@ def _tag_tube(obj, pts_local, dia):
     obj["dia"] = float(dia)
 
 
-def tube_mesh(name, points, dia, segments=16, end_ext=0.0, units="m", coll=None):
+def tube_mesh(name, points, dia, segments=16, end_ext=0.0, units="m", coll=None, uv_tile=None, closed=False):
     """Watertight tube mesh along a polyline: parallel-transport rings, fan-capped ends.
 
     Closed and consistently wound, so it works as a MANIFOLD boolean cutter (curve
@@ -208,12 +247,30 @@ def tube_mesh(name, points, dia, segments=16, end_ext=0.0, units="m", coll=None)
     their tangents so a channel breaks cleanly into the pocket/cavity it joins
     (1-1.5 mm for print channels). points/dia/end_ext are in `units`; the object is in
     metres with identity transform. Stores "centerline"/"dia" props (metres).
+
+    uv_tile (in `units` per texture repeat, optional): also write a "UVMap": u around
+    the section (whole repeats, so the seam matches), v along the arc length, caps
+    mapped as small discs. Use it for cables, hoses and pipes that get textures.
+    closed: the path is a loop (wire ring, hoop, gasket). The last ring joins the
+    first, no caps, and the frame twist left by parallel transport is spread evenly
+    along the loop so the seam has no kink. A repeated last point is dropped.
+    Raises ValueError for too few distinct points (2, or 3 when closed), end_ext on a
+    closed loop, or uv_tile <= 0.
     """
     k = _UNIT[units]
     P = np.asarray(points, float) * k
     keep = np.r_[True, np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-9]
     P = P[keep]
-    if len(P) < 2:
+    if uv_tile is not None and not uv_tile > 0:
+        raise ValueError(f"{name}: uv_tile must be > 0")
+    if closed:
+        if len(P) > 2 and np.linalg.norm(P[0] - P[-1]) < 1e-9:
+            P = P[:-1]
+        if len(P) < 3:
+            raise ValueError(f"{name}: a closed tube_mesh needs at least three distinct points")
+        if end_ext:
+            raise ValueError(f"{name}: end_ext needs open ends (closed=False)")
+    elif len(P) < 2:
         raise ValueError(f"{name}: tube_mesh needs at least two distinct points")
     centre = P.copy()
     e = end_ext * k
@@ -222,38 +279,75 @@ def tube_mesh(name, points, dia, segments=16, end_ext=0.0, units="m", coll=None)
         d1 = P[-1] - P[-2]
         P = np.vstack([P[0] + d0 / np.linalg.norm(d0) * e, P, P[-1] + d1 / np.linalg.norm(d1) * e])
     r = dia * k / 2
-    T = np.gradient(P, axis=0)
+    T = np.roll(P, -1, axis=0) - np.roll(P, 1, axis=0) if closed else np.gradient(P, axis=0)
     T /= np.linalg.norm(T, axis=1)[:, None]
     n = np.cross(T[0], [0, 0, 1.0])
     if np.linalg.norm(n) < 1e-3:
         n = np.cross(T[0], [1.0, 0, 0])
     n /= np.linalg.norm(n)
-    ang = np.linspace(0, 2 * np.pi, segments, endpoint=False)
-    rings = []
-    for p, t in zip(P, T):
+    frames = []
+    for t in T:
         n = n - np.dot(n, t) * t                  # parallel transport: no twisting
         n /= np.linalg.norm(n)
+        frames.append(n.copy())
+    L, sg = len(P), segments
+    if closed:                                    # spread the holonomy so ring L == ring 0
+        n0, t0 = frames[0], T[0]
+        nw = frames[-1] - np.dot(frames[-1], t0) * t0
+        nw /= np.linalg.norm(nw)
+        twist = math.atan2(np.dot(np.cross(n0, nw), t0), np.dot(n0, nw))
+        for i in range(L):
+            phi = -twist * i / L
+            b = np.cross(T[i], frames[i])
+            frames[i] = math.cos(phi) * frames[i] + math.sin(phi) * b
+    ang = np.linspace(0, 2 * np.pi, segments, endpoint=False)
+    rings = []
+    for p, t, n in zip(P, T, frames):
         b = np.cross(t, n)
         rings.append(p + r * (np.cos(ang)[:, None] * n + np.sin(ang)[:, None] * b))
     verts = np.vstack(rings).tolist()
-    L, sg = len(P), segments
-    faces = [(i * sg + j, i * sg + (j + 1) % sg, (i + 1) * sg + (j + 1) % sg, (i + 1) * sg + j)
-             for i in range(L - 1) for j in range(sg)]
-    c0, c1 = len(verts), len(verts) + 1
-    verts += [P[0].tolist(), P[-1].tolist()]
-    faces += [(c0, (j + 1) % sg, j) for j in range(sg)]
-    faces += [(c1, (L - 1) * sg + j, (L - 1) * sg + (j + 1) % sg) for j in range(sg)]
-    obj = mesh_from_data(name, verts, faces, coll)
+    spans = L if closed else L - 1
+    faces = [(i * sg + j, i * sg + (j + 1) % sg, ((i + 1) % L) * sg + (j + 1) % sg, ((i + 1) % L) * sg + j)
+             for i in range(spans) for j in range(sg)]
+    uvs = None
+    if uv_tile:
+        tile = uv_tile * k
+        seg_len = np.linalg.norm(np.roll(P, -1, axis=0) - P, axis=1)[:spans]
+        s = np.r_[0.0, np.cumsum(seg_len)] / tile
+        U = max(1, round(math.tau * r / tile))
+        uvs = [[(U * j / sg, s[i]), (U * (j + 1) / sg, s[i]), (U * (j + 1) / sg, s[i + 1]), (U * j / sg, s[i + 1])]
+               for i in range(spans) for j in range(sg)]
+    if not closed:
+        c0, c1 = len(verts), len(verts) + 1
+        verts += [P[0].tolist(), P[-1].tolist()]
+        faces += [(c0, (j + 1) % sg, j) for j in range(sg)]
+        faces += [(c1, (L - 1) * sg + j, (L - 1) * sg + (j + 1) % sg) for j in range(sg)]
+        if uvs is not None:
+            q = r / tile
+            disc = [(0.5 + q * math.cos(a), 0.5 + q * math.sin(a)) for a in ang]
+            uvs += [[(0.5, 0.5), disc[(j + 1) % sg], disc[j]] for j in range(sg)]
+            uvs += [[(0.5, 0.5), disc[j], disc[(j + 1) % sg]] for j in range(sg)]
+    obj = mesh_from_data(name, verts, faces, coll, uvs=uvs)
     _tag_tube(obj, centre.tolist(), dia * k)
     return obj
 
 
-def mesh_from_data(name, verts, faces, coll=None, recalc_normals=True):
+def mesh_from_data(name, verts, faces, coll=None, recalc_normals=True, uvs=None):
     """Mesh object from vertex/face lists (metres, world = object space), validated and
-    with consistent outward normals (what the MANIFOLD solver needs)."""
+    with consistent outward normals (what the MANIFOLD solver needs).
+
+    uvs (optional): one list of (u, v) per face, one pair per face corner in the face's
+    vertex order; written to a "UVMap" layer (kept through the normal fix).
+    Raises ValueError when uvs does not match the faces."""
     me = bpy.data.meshes.new(name)
     me.from_pydata([tuple(v) for v in verts], [], [tuple(f) for f in faces])
-    me.validate()
+    if uvs is not None:
+        if len(uvs) != len(faces) or any(len(u) != len(f) for u, f in zip(uvs, faces)):
+            bpy.data.meshes.remove(me)
+            raise ValueError(f"{name}: uvs needs one (u, v) per face corner, in face order")
+        flat = np.asarray([c for fu in uvs for uv in fu for c in uv], np.float32)
+        me.uv_layers.new(name="UVMap").data.foreach_set("uv", flat)
+    me.validate(clean_customdata=uvs is None)
     if recalc_normals:
         bm = bmesh.new()
         bm.from_mesh(me)
